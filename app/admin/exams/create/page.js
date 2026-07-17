@@ -29,6 +29,79 @@ export default function CreateExamPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // --- AI question generation state ---
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiNumQuestions, setAiNumQuestions] = useState(5);
+  const [aiDifficulty, setAiDifficulty] = useState("medium");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [aiWarnings, setAiWarnings] = useState([]);
+  const [uploadFile, setUploadFile] = useState(null);
+  const [uploadLoading, setUploadLoading] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState("");
+
+  const handleUploadPDF = async () => {
+    if (!uploadFile) return;
+    setUploadLoading(true);
+    setUploadMessage("");
+    try {
+      const { token } = getAuth();
+      const formData = new FormData();
+      formData.append("file", uploadFile);
+      const res = await fetch("/api/admin/rag-upload", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload failed");
+      setUploadMessage(`Ingested "${uploadFile.name}" successfully. You can now generate questions from it.`);
+    } catch (err) {
+      setUploadMessage(`Error: ${err.message}`);
+    } finally {
+      setUploadLoading(false);
+    }
+  };
+
+  const handleGenerateQuestions = async () => {
+    if (!aiPrompt.trim()) {
+      setAiError("Enter a topic or instructions for the AI first.");
+      return;
+    }
+    setAiError("");
+    setAiWarnings([]);
+    setAiLoading(true);
+    try {
+      const { token } = getAuth();
+      const res = await fetch("/api/admin/generate-questions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          topicPrompt: aiPrompt,
+          numQuestions: aiNumQuestions,
+          difficulty: aiDifficulty,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Question generation failed");
+
+      // Replace the initial empty placeholder question if the form is still untouched,
+      // otherwise append to whatever the admin already has.
+      setForm((prev) => {
+        const isUntouched =
+          prev.questions.length === 1 && !prev.questions[0].questionText.trim();
+        const existing = isUntouched ? [] : prev.questions;
+        return { ...prev, questions: [...existing, ...data.questions] };
+      });
+
+      if (data.warnings?.length) setAiWarnings(data.warnings);
+    } catch (err) {
+      setAiError(err.message);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const updateQuestion = (index, field, value) => {
     const updated = [...form.questions];
     updated[index][field] = value;
@@ -183,6 +256,90 @@ export default function CreateExamPage() {
               className="w-full border rounded-lg px-3 py-2"
             />
           </div>
+        </div>
+
+        {/* AI Question Generation */}
+        <div className="bg-white p-5 rounded-xl shadow-sm border space-y-4">
+          <h2 className="font-semibold">Generate Questions with AI</h2>
+
+          <div>
+            <label className="text-sm text-gray-600">1. Upload source PDF (optional if already ingested)</label>
+            <div className="flex gap-2 mt-1">
+              <input
+                type="file"
+                accept=".pdf,.docx,.txt,.md"
+                onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                className="flex-1 border rounded-lg px-3 py-2 text-sm"
+              />
+              <button
+                type="button"
+                onClick={handleUploadPDF}
+                disabled={!uploadFile || uploadLoading}
+                className="px-4 py-2 border rounded-lg hover:bg-gray-50 disabled:opacity-50 text-sm"
+              >
+                {uploadLoading ? "Uploading..." : "Upload"}
+              </button>
+            </div>
+            {uploadMessage && <p className="text-xs mt-1 text-gray-600">{uploadMessage}</p>}
+          </div>
+
+          <div>
+            <label className="text-sm text-gray-600">2. What should the questions cover?</label>
+            <textarea
+              placeholder='e.g. "Focus on chapter 3, photosynthesis and cellular respiration, mix of easy and conceptual questions"'
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              className="w-full border rounded-lg px-3 py-2 mt-1"
+              rows={2}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-sm text-gray-600">Number of questions</label>
+              <input
+                type="number"
+                min={1}
+                max={25}
+                value={aiNumQuestions}
+                onChange={(e) => setAiNumQuestions(Number(e.target.value))}
+                className="w-full border rounded-lg px-3 py-2"
+              />
+            </div>
+            <div>
+              <label className="text-sm text-gray-600">Difficulty</label>
+              <select
+                value={aiDifficulty}
+                onChange={(e) => setAiDifficulty(e.target.value)}
+                className="w-full border rounded-lg px-3 py-2"
+              >
+                <option value="easy">Easy</option>
+                <option value="medium">Medium</option>
+                <option value="hard">Hard</option>
+              </select>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleGenerateQuestions}
+            disabled={aiLoading}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 text-sm"
+          >
+            {aiLoading ? "Generating..." : "Generate with AI"}
+          </button>
+
+          {aiError && <p className="text-red-600 text-sm">{aiError}</p>}
+          {aiWarnings.length > 0 && (
+            <ul className="text-xs text-amber-600 list-disc list-inside">
+              {aiWarnings.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          )}
+          <p className="text-xs text-gray-500">
+            Generated questions appear below — review them like any manually added question before publishing.
+          </p>
         </div>
 
         {/* Questions */}
