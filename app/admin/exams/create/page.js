@@ -6,8 +6,9 @@ import { getAuth } from "@/lib/clientAuth";
 
 const emptyQuestion = () => ({
   questionText: "",
+  questionType: "single", // "single" | "multiple" | "fill_blank"
   options: ["", "", "", ""],
-  correctAnswer: "",
+  correctAnswers: [],
   marks: 1,
 });
 
@@ -86,13 +87,21 @@ export default function CreateExamPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Question generation failed");
 
-      // Replace the initial empty placeholder question if the form is still untouched,
-      // otherwise append to whatever the admin already has.
+      // The RAG service returns { questionText, options, correctAnswer, marks }.
+      // Map that into this app's actual schema: questionType "single" + correctAnswers array.
+      const mapped = data.questions.map((q) => ({
+        questionText: q.questionText,
+        questionType: "single",
+        options: q.options,
+        correctAnswers: [q.correctAnswer],
+        marks: q.marks || 1,
+      }));
+
       setForm((prev) => {
         const isUntouched =
           prev.questions.length === 1 && !prev.questions[0].questionText.trim();
         const existing = isUntouched ? [] : prev.questions;
-        return { ...prev, questions: [...existing, ...data.questions] };
+        return { ...prev, questions: [...existing, ...mapped] };
       });
 
       if (data.warnings?.length) setAiWarnings(data.warnings);
@@ -106,12 +115,42 @@ export default function CreateExamPage() {
   const updateQuestion = (index, field, value) => {
     const updated = [...form.questions];
     updated[index][field] = value;
+    // Reset correctAnswers when switching question type to avoid stale/invalid data
+    if (field === "questionType") {
+      updated[index].correctAnswers = [];
+      if (value === "fill_blank") updated[index].options = [];
+      else if (updated[index].options.length === 0) updated[index].options = ["", "", "", ""];
+    }
     setForm({ ...form, questions: updated });
   };
 
   const updateOption = (qIndex, optIndex, value) => {
     const updated = [...form.questions];
     updated[qIndex].options[optIndex] = value;
+    setForm({ ...form, questions: updated });
+  };
+
+  const toggleCorrectAnswer = (qIndex, optValue) => {
+    const updated = [...form.questions];
+    const q = updated[qIndex];
+    if (q.questionType === "single") {
+      q.correctAnswers = [optValue];
+    } else {
+      const has = q.correctAnswers.includes(optValue);
+      q.correctAnswers = has
+        ? q.correctAnswers.filter((a) => a !== optValue)
+        : [...q.correctAnswers, optValue];
+    }
+    setForm({ ...form, questions: updated });
+  };
+
+  const updateFillBlankAnswers = (qIndex, value) => {
+    // Comma-separated list of acceptable answers
+    const updated = [...form.questions];
+    updated[qIndex].correctAnswers = value
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     setForm({ ...form, questions: updated });
   };
 
@@ -127,11 +166,25 @@ export default function CreateExamPage() {
     e.preventDefault();
     setError("");
 
-    // Basic validation: every question must have a correctAnswer matching an option
     for (const [i, q] of form.questions.entries()) {
-      if (!q.correctAnswer || !q.options.includes(q.correctAnswer)) {
-        setError(`Question ${i + 1}: correct answer must match one of the options exactly`);
+      if (!q.questionText.trim()) {
+        setError(`Question ${i + 1}: question text is required`);
         return;
+      }
+      if (q.questionType === "fill_blank") {
+        if (q.correctAnswers.length === 0) {
+          setError(`Question ${i + 1}: provide at least one acceptable answer`);
+          return;
+        }
+      } else {
+        if (q.options.some((o) => !o.trim())) {
+          setError(`Question ${i + 1}: all options must be filled in`);
+          return;
+        }
+        if (q.correctAnswers.length === 0) {
+          setError(`Question ${i + 1}: select at least one correct answer`);
+          return;
+        }
       }
     }
 
@@ -140,6 +193,8 @@ export default function CreateExamPage() {
       const { token } = getAuth();
       const payload = {
         ...form,
+        // Convert the browser's local wall-clock time into an unambiguous UTC
+        // instant, so the stored time is correct regardless of server timezone.
         startTime: new Date(form.startTime).toISOString(),
         endTime: new Date(form.endTime).toISOString(),
       };
@@ -244,6 +299,19 @@ export default function CreateExamPage() {
               }
             />
             Disable copy/paste during exam
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={form.settings.showResultsToStudents}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  settings: { ...form.settings, showResultsToStudents: e.target.checked },
+                })
+              }
+            />
+            Allow students to see their score and correct answers after submitting
           </label>
           <div>
             <label className="text-sm text-gray-600">
@@ -365,6 +433,7 @@ export default function CreateExamPage() {
                   </button>
                 )}
               </div>
+
               <input
                 type="text"
                 placeholder="Question text"
@@ -373,25 +442,62 @@ export default function CreateExamPage() {
                 className="w-full border rounded-lg px-3 py-2"
                 required
               />
-              {q.options.map((opt, optIndex) => (
-                <div key={optIndex} className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    name={`correct-${qIndex}`}
-                    checked={q.correctAnswer === opt && opt !== ""}
-                    onChange={() => updateQuestion(qIndex, "correctAnswer", opt)}
-                  />
+
+              <div>
+                <label className="text-sm text-gray-600">Question type</label>
+                <select
+                  value={q.questionType}
+                  onChange={(e) => updateQuestion(qIndex, "questionType", e.target.value)}
+                  className="w-full border rounded-lg px-3 py-2"
+                >
+                  <option value="single">Single correct answer</option>
+                  <option value="multiple">Multiple correct answers</option>
+                  <option value="fill_blank">Fill in the blank</option>
+                </select>
+              </div>
+
+              {q.questionType === "fill_blank" ? (
+                <div>
+                  <label className="text-sm text-gray-600">
+                    Acceptable answers (comma-separated — any one matches)
+                  </label>
                   <input
                     type="text"
-                    placeholder={`Option ${optIndex + 1}`}
-                    value={opt}
-                    onChange={(e) => updateOption(qIndex, optIndex, e.target.value)}
-                    className="flex-1 border rounded-lg px-3 py-2"
+                    placeholder="e.g. Paris, paris"
+                    value={q.correctAnswers.join(", ")}
+                    onChange={(e) => updateFillBlankAnswers(qIndex, e.target.value)}
+                    className="w-full border rounded-lg px-3 py-2"
                     required
                   />
                 </div>
-              ))}
-              <p className="text-xs text-gray-500">Select the radio button next to the correct option</p>
+              ) : (
+                <>
+                  {q.options.map((opt, optIndex) => (
+                    <div key={optIndex} className="flex items-center gap-2">
+                      <input
+                        type={q.questionType === "multiple" ? "checkbox" : "radio"}
+                        name={`correct-${qIndex}`}
+                        checked={q.correctAnswers.includes(opt) && opt !== ""}
+                        onChange={() => toggleCorrectAnswer(qIndex, opt)}
+                      />
+                      <input
+                        type="text"
+                        placeholder={`Option ${optIndex + 1}`}
+                        value={opt}
+                        onChange={(e) => updateOption(qIndex, optIndex, e.target.value)}
+                        className="flex-1 border rounded-lg px-3 py-2"
+                        required
+                      />
+                    </div>
+                  ))}
+                  <p className="text-xs text-gray-500">
+                    {q.questionType === "multiple"
+                      ? "Check all correct options"
+                      : "Select the radio button next to the correct option"}
+                  </p>
+                </>
+              )}
+
               <div>
                 <label className="text-sm text-gray-600">Marks</label>
                 <input
