@@ -8,6 +8,7 @@ import { getAuth, clearAuth } from "@/lib/clientAuth";
 export default function StudentDashboard() {
   const router = useRouter();
   const [exams, setExams] = useState([]);
+  const [submissions, setSubmissions] = useState({}); // examId -> submission
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -28,6 +29,19 @@ export default function StudentDashboard() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setExams(data.exams);
+
+      // Fetch this student's submission status for each exam so we know
+      // whether to show "Start Exam" or "View Results".
+      const subEntries = await Promise.all(
+        data.exams.map(async (exam) => {
+          const subRes = await fetch(`/api/submissions?examId=${exam._id}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const subData = await subRes.json();
+          return [exam._id, subData.submission || null];
+        })
+      );
+      setSubmissions(Object.fromEntries(subEntries));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -64,6 +78,9 @@ export default function StudentDashboard() {
       <div className="grid gap-4">
         {exams.map((exam) => {
           const status = examStatus(exam);
+          const submission = submissions[exam._id];
+          const hasSubmitted = submission?.status === "submitted";
+
           return (
             <div key={exam._id} className="bg-white p-5 rounded-xl shadow-sm border flex justify-between items-center">
               <div>
@@ -72,26 +89,44 @@ export default function StudentDashboard() {
                   {exam.questions.length} questions · {exam.duration} min
                 </p>
                 <p className="text-sm text-gray-400">
-                  {new Date(exam.startTime).toLocaleString()} — {new Date(exam.endTime).toLocaleString()}
+                  {new Date(exam.startTime).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} — {new Date(exam.endTime).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST
                 </p>
               </div>
-              {status === "live" && (
-                <Link
-                  href={`/student/exam/${exam._id}`}
-                  className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-500"
-                >
-                  Start Exam
-                </Link>
-              )}
-              {status === "upcoming" && (
-                <span className="text-sm text-yellow-600 bg-yellow-50 px-3 py-1.5 rounded-lg">
-                  Not started yet
-                </span>
-              )}
-              {status === "closed" && (
-                <span className="text-sm text-gray-500 bg-gray-100 px-3 py-1.5 rounded-lg">
-                  Closed
-                </span>
+
+              {hasSubmitted ? (
+                exam.settings?.showResultsToStudents ? (
+                  <Link
+                    href={`/student/exam/${exam._id}/review`}
+                    className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-500"
+                  >
+                    View Results
+                  </Link>
+                ) : (
+                  <span className="text-sm text-gray-500 bg-gray-100 px-3 py-1.5 rounded-lg">
+                    Submitted
+                  </span>
+                )
+              ) : (
+                <>
+                  {status === "live" && (
+                    <Link
+                      href={`/student/exam/${exam._id}`}
+                      className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-500"
+                    >
+                      Start Exam
+                    </Link>
+                  )}
+                  {status === "upcoming" && (
+                    <span className="text-sm text-yellow-600 bg-yellow-50 px-3 py-1.5 rounded-lg">
+                      Not started yet
+                    </span>
+                  )}
+                  {status === "closed" && (
+                    <span className="text-sm text-gray-500 bg-gray-100 px-3 py-1.5 rounded-lg">
+                      Closed
+                    </span>
+                  )}
+                </>
               )}
             </div>
           );

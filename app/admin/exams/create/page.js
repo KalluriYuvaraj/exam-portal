@@ -24,6 +24,7 @@ export default function CreateExamPage() {
       shuffleQuestions: false,
       maxTabSwitchWarnings: 3,
       disableCopyPaste: true,
+      showResultsToStudents: false,
     },
   });
   const [error, setError] = useState("");
@@ -137,10 +138,15 @@ export default function CreateExamPage() {
     setLoading(true);
     try {
       const { token } = getAuth();
+      const payload = {
+        ...form,
+        startTime: new Date(form.startTime).toISOString(),
+        endTime: new Date(form.endTime).toISOString(),
+      };
       const res = await fetch("/api/exams", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to create exam");
